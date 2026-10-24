@@ -220,16 +220,22 @@ pub fn build_chain(rows: &[OutboxRow], signing: &SigningKey) -> Vec<Envelope> {
 /// envelope's hash, each signature against the envelope's own signer key, and
 /// every link between consecutive envelopes. Returns the envelope count.
 ///
-/// The first envelope's `prev_hash` is an anchor, not a checked link: a log
-/// exported with `--since` starts mid-chain, and its first link can only be
-/// checked against a predecessor the reader does not have. Its hash and
-/// signature are still fully checked.
+/// The input may also be the JSON array form `federate export --json` writes;
+/// it is verified in array order. The first envelope's `prev_hash` is an
+/// anchor, not a checked link: a log exported with `--since` starts mid-chain,
+/// and its first link can only be checked against a predecessor the reader
+/// does not have. Its hash and signature are still fully checked.
 ///
 /// This function never touches the database, by construction: it only reads
 /// the text it is given.
 pub fn verify_text(text: &str) -> Result<usize, String> {
-    let mut previous_hash: Option<String> = None;
-    let mut count = 0;
+    let trimmed = text.trim();
+    if trimmed.starts_with('[') {
+        let envelopes: Vec<Envelope> = serde_json::from_str(trimmed)
+            .map_err(|e| format!("envelope log: invalid JSON array: {e}"))?;
+        return verify_envelopes(&envelopes);
+    }
+    let mut envelopes = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
@@ -238,11 +244,18 @@ pub fn verify_text(text: &str) -> Result<usize, String> {
         let envelope: Envelope = serde_json::from_str(line).map_err(|e| {
             format!("envelope {}: invalid JSON: {e}", index + 1)
         })?;
-        verify_one(&envelope, previous_hash.as_deref(), index + 1)?;
-        previous_hash = Some(envelope.hash.clone());
-        count += 1;
+        envelopes.push(envelope);
     }
-    Ok(count)
+    verify_envelopes(&envelopes)
+}
+
+fn verify_envelopes(envelopes: &[Envelope]) -> Result<usize, String> {
+    let mut previous_hash: Option<&str> = None;
+    for (index, envelope) in envelopes.iter().enumerate() {
+        verify_one(envelope, previous_hash, index + 1)?;
+        previous_hash = Some(envelope.hash.as_str());
+    }
+    Ok(envelopes.len())
 }
 
 fn verify_one(

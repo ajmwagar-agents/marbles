@@ -253,6 +253,13 @@ enum Command {
     },
     /// Check integrity, settings, row counts, and WAL size (local mode only).
     Doctor,
+    /// Federation envelope layer: sign and verify the outbox as a hash-chained
+    /// log. Transport-free: no gossip, no remote application, no multi-writer
+    /// semantics. Export reads the local database; keygen and verify do not.
+    Federate {
+        #[command(subcommand)]
+        action: FederateAction,
+    },
     /// Plans are DAGs over issues: inspect the graph, schedule it, take the frontier, or
     /// draft one from a spec before dispatching any worker.
     Plan {
@@ -289,6 +296,32 @@ enum Command {
         target: String,
         #[arg(long)]
         remove: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum FederateAction {
+    /// Generate the local writer's Ed25519 keypair under $MARBLES_HOME/federate.
+    Keygen {
+        /// Replace an existing keypair instead of refusing.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Emit the outbox as signed JSONL envelopes, one per line (local mode only).
+    Export {
+        /// First sequence to include (inclusive); earlier rows still anchor the chain.
+        #[arg(long)]
+        since: Option<i64>,
+        /// Emit a single JSON array instead of JSONL.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify envelope signatures and chain links from a file or stdin.
+    /// Never touches the database.
+    Verify {
+        /// Envelope file; stdin when omitted.
+        #[arg(long)]
+        file: Option<PathBuf>,
     },
 }
 
@@ -492,6 +525,30 @@ enum LabelAction {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    // Federation keygen and verify never touch the database: keygen only
+    // writes the keypair, and verify only reads the input it is given. They
+    // run before mode resolution so verifying someone else's log works on a
+    // machine with no local store at all. Export falls through: it reads the
+    // local store and is dispatched in run().
+    match &cli.command {
+        Command::Federate {
+            action: FederateAction::Keygen { force },
+        } => {
+            return match federate_keygen(*force) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => fail(err),
+            };
+        }
+        Command::Federate {
+            action: FederateAction::Verify { file },
+        } => {
+            return match federate_verify(file.clone()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => fail(err),
+            };
+        }
+        _ => {}
+    }
     if let Command::Login {
         issuer,
         client_id,
@@ -1952,6 +2009,39 @@ async fn run(cli: &Cli, mode: &Mode, effective_url: Option<&str>) -> Result<(), 
             }
             Ok(())
         }
+        Command::Federate { action } => match action {
+            FederateAction::Keygen { force } => federate_keygen(*force),
+            FederateAction::Verify { file } => federate_verify(file.clone()),
+            FederateAction::Export { since, json } => {
+                let db = require_local(
+                    mode,
+                    "federate export reads the local database file; run it on the host that owns --url",
+                )?;
+                let rows = db.outbox_log().map_err(|e| e.to_string())?;
+                let signing = marbles::federate::load_signing_key(&config::state_dir())?;
+                // The chain is always built from genesis so links are true;
+                // --since only filters what is printed.
+                let envelopes = marbles::federate::build_chain(&rows, &signing);
+                let shown: Vec<_> = match since {
+                    Some(first) => envelopes
+                        .into_iter()
+                        .filter(|env| env.seq >= *first)
+                        .collect(),
+                    None => envelopes,
+                };
+                if *json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&shown).map_err(|e| e.to_string())?
+                    );
+                } else {
+                    for env in &shown {
+                        println!("{}", serde_json::to_string(env).map_err(|e| e.to_string())?);
+                    }
+                }
+                Ok(())
+            }
+        },
         Command::Plan { action } => match action {
             PlanAction::Show { plan } => {
                 let view: marbles::plan::PlanView = mode
@@ -2206,6 +2296,38 @@ fn read_spec_arg(value: &str) -> Result<String, String> {
         Ok(text) => Ok(text),
         Err(_) => Ok(value.to_string()),
     }
+}
+
+/// Generate the local writer's federation keypair and print its peer id.
+/// Pure filesystem work: no database, no network, reachable before mode
+/// resolution so keygen works on a machine with no store yet.
+fn federate_keygen(force: bool) -> Result<(), String> {
+    let info = marbles::federate::keygen(&config::state_dir(), force)?;
+    println!("peer id: {}", info.peer_id);
+    println!("secret key: {} (0600)", info.secret_path.display());
+    println!("public key: {}", info.public_path.display());
+    Ok(())
+}
+
+/// Verify a JSONL envelope log from a file or stdin. Reads only the input it
+/// is given; it never opens, let alone writes, any database.
+fn federate_verify(file: Option<PathBuf>) -> Result<(), String> {
+    let text = match file {
+        Some(path) => {
+            std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?
+        }
+        None => {
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .map_err(|e| format!("reading stdin: {e}"))?;
+            buf
+        }
+    };
+    let count = marbles::federate::verify_text(&text)?;
+    println!("verified {count} envelope(s): signatures and chain ok");
+    Ok(())
 }
 
 fn require_local<'a>(mode: &'a Mode, hint: &str) -> Result<&'a Arc<Db>, String> {
