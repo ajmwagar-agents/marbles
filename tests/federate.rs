@@ -3,9 +3,7 @@
 
 use ed25519_dalek::SigningKey;
 use marbles::db::{Db, OutboxRow};
-use marbles::federate::{
-    GENESIS_PREV, build_chain, keygen, seal_envelope, verify_text,
-};
+use marbles::federate::{GENESIS_PREV, build_chain, keygen, seal_envelope, verify_text};
 use marbles::types::*;
 
 fn db_with_project() -> Db {
@@ -94,7 +92,10 @@ fn export_chain_is_verifiable_across_create_and_claim() {
     assert_eq!(chain[1].event, "claimed");
     assert_eq!(
         chain[0].prev_hash,
-        GENESIS_PREV.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        GENESIS_PREV
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
     );
     assert_eq!(chain[1].prev_hash, chain[0].hash);
     assert_eq!(verify_text(&to_jsonl(&chain)).unwrap(), 2);
@@ -138,7 +139,9 @@ fn verify_rejects_tampered_signature() {
     let mut chain = chain_from_db(&db);
     let first = chain[0].signature.chars().next().unwrap();
     let replacement = if first == '0' { '1' } else { '0' };
-    chain[0].signature.replace_range(0..1, &replacement.to_string());
+    chain[0]
+        .signature
+        .replace_range(0..1, &replacement.to_string());
     let err = verify_text(&to_jsonl(&chain)).unwrap_err();
     assert!(err.contains("signature invalid"), "{err}");
 }

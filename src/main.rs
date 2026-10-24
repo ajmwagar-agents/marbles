@@ -2313,9 +2313,8 @@ fn federate_keygen(force: bool) -> Result<(), String> {
 /// is given; it never opens, let alone writes, any database.
 fn federate_verify(file: Option<PathBuf>) -> Result<(), String> {
     let text = match file {
-        Some(path) => {
-            std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?
-        }
+        Some(path) => std::fs::read_to_string(&path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?,
         None => {
             use std::io::Read;
             let mut buf = String::new();

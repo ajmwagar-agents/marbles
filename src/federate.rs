@@ -66,8 +66,7 @@ pub struct KeypairInfo {
 /// signed with the old one.
 pub fn keygen(state_dir: &Path, force: bool) -> Result<KeypairInfo, String> {
     let dir = key_dir(state_dir);
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     let secret_path = secret_key_path(state_dir);
     let public_path = public_key_path(state_dir);
     if secret_path.exists() && !force {
@@ -106,18 +105,11 @@ pub fn load_signing_key(state_dir: &Path) -> Result<SigningKey, String> {
             path.display()
         )
     })?;
-    let seed = hex_decode(text.trim()).map_err(|e| {
-        format!(
-            "federation key at {} is not valid hex: {e}",
-            path.display()
-        )
-    })?;
-    let seed: [u8; 32] = seed.try_into().map_err(|_| {
-        format!(
-            "federation key at {} is not a 32-byte seed",
-            path.display()
-        )
-    })?;
+    let seed = hex_decode(text.trim())
+        .map_err(|e| format!("federation key at {} is not valid hex: {e}", path.display()))?;
+    let seed: [u8; 32] = seed
+        .try_into()
+        .map_err(|_| format!("federation key at {} is not a 32-byte seed", path.display()))?;
     Ok(SigningKey::from_bytes(&seed))
 }
 
@@ -241,9 +233,8 @@ pub fn verify_text(text: &str) -> Result<usize, String> {
         if line.is_empty() {
             continue;
         }
-        let envelope: Envelope = serde_json::from_str(line).map_err(|e| {
-            format!("envelope {}: invalid JSON: {e}", index + 1)
-        })?;
+        let envelope: Envelope = serde_json::from_str(line)
+            .map_err(|e| format!("envelope {}: invalid JSON: {e}", index + 1))?;
         envelopes.push(envelope);
     }
     verify_envelopes(&envelopes)
@@ -258,11 +249,7 @@ fn verify_envelopes(envelopes: &[Envelope]) -> Result<usize, String> {
     Ok(envelopes.len())
 }
 
-fn verify_one(
-    env: &Envelope,
-    previous_hash: Option<&str>,
-    line_no: usize,
-) -> Result<(), String> {
+fn verify_one(env: &Envelope, previous_hash: Option<&str>, line_no: usize) -> Result<(), String> {
     let label = format!("envelope {line_no} (seq {})", env.seq);
     if env.schema != SCHEMA {
         return Err(format!(
@@ -276,15 +263,15 @@ fn verify_one(
             "{label}: hash mismatch; the envelope content was modified after signing"
         ));
     }
-    let public = hex_decode(&env.signer)
-        .map_err(|_| format!("{label}: signer is not valid hex"))?;
+    let public =
+        hex_decode(&env.signer).map_err(|_| format!("{label}: signer is not valid hex"))?;
     let public: [u8; 32] = public
         .try_into()
         .map_err(|_| format!("{label}: signer is not a 32-byte Ed25519 public key"))?;
     let verifying = VerifyingKey::from_bytes(&public)
         .map_err(|_| format!("{label}: signer is not a valid Ed25519 public key"))?;
-    let signature = hex_decode(&env.signature)
-        .map_err(|_| format!("{label}: signature is not valid hex"))?;
+    let signature =
+        hex_decode(&env.signature).map_err(|_| format!("{label}: signature is not valid hex"))?;
     let signature = Signature::from_slice(&signature)
         .map_err(|_| format!("{label}: signature is not a 64-byte Ed25519 signature"))?;
     verifying
