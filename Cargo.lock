@@ -1163,6 +1163,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
+ "ed25519-dalek",
  "getrandom 0.3.4",
  "hmac 0.12.1",
  "jsonwebtoken",

@@ -221,6 +221,21 @@ pub struct OutboundEvent {
     pub attempts: i64,
 }
 
+/// One outbox row joined to its history row (same `seq` by construction in
+/// `log_event`) so a federation envelope carries the full event payload, not
+/// just the event name. Used by the signed-envelope export only; the webhook
+/// publisher keeps its own pending-only view.
+#[derive(Debug, Clone)]
+pub struct OutboxRow {
+    pub seq: i64,
+    pub issue_id: String,
+    pub project: String,
+    pub occurred_at: i64,
+    pub event: String,
+    pub actor: String,
+    pub detail: String,
+}
+
 /// Lazily opened, physically separate company stores for hosted operation.
 ///
 /// The company id comes exclusively from the verified principal. Keeping each
@@ -650,6 +665,37 @@ impl Db {
                         occurred_at: row.get(3)?,
                         event: row.get(4)?,
                         attempts: row.get(5)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// Every outbox row in `seq` order, joined to its history row, for the
+    /// signed-envelope export. Unlike `pending_events` this is the whole log,
+    /// not the undelivered subset: a federation chain must cover delivered
+    /// rows too, or a peer cannot verify continuity.
+    pub fn outbox_log(&self) -> Result<Vec<OutboxRow>> {
+        let mut out = Vec::new();
+        self.query(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT o.seq, o.issue_id, o.project, o.occurred_at, o.event,
+                        COALESCE(h.actor, ''), COALESCE(h.detail, '')
+                 FROM outbound_event o LEFT JOIN history h ON h.seq = o.seq
+                 ORDER BY o.seq",
+            )?;
+            out = stmt
+                .query_map([], |row| {
+                    Ok(OutboxRow {
+                        seq: row.get(0)?,
+                        issue_id: row.get(1)?,
+                        project: row.get(2)?,
+                        occurred_at: row.get(3)?,
+                        event: row.get(4)?,
+                        actor: row.get(5)?,
+                        detail: row.get(6)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
